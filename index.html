@@ -9,10 +9,21 @@
     :root { color-scheme: dark; font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
     * { box-sizing: border-box; }
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
-    body { background: radial-gradient(ellipse at 52% 43%, #263140 0%, #141c29 48%, #090e17 100%); color: #f5f3ec; }
-    #stage, #labels { position: fixed; inset: 0; width: 100%; height: 100%; }
+    body {
+      background-color: var(--bg-base, #07121e);
+      background-image:
+        radial-gradient(ellipse at 48% 43%, var(--bg-glow, #385b7555) 0%, var(--bg-wash, #17283c55) 38%, transparent 72%),
+        radial-gradient(circle at 12% 82%, var(--bg-spot, #1a6b8750) 0%, transparent 38%),
+        repeating-linear-gradient(0deg, var(--bg-grid, #8ac1d30d) 0 1px, transparent 1px 52px),
+        repeating-linear-gradient(90deg, var(--bg-grid, #8ac1d30d) 0 1px, transparent 1px 52px),
+        linear-gradient(145deg, var(--bg-corner, #0b1827), var(--bg-base, #07111e) 72%);
+      color: #f5f3ec;
+    }
+    #stage, #labels, #leaders { position: fixed; inset: 0; width: 100%; height: 100%; }
     #stage { display: block; touch-action: none; }
-    #labels { pointer-events: none; overflow: hidden; }
+    #labels, #leaders { pointer-events: none; overflow: hidden; }
+    #leaders { z-index: 1; }
+    #labels { z-index: 2; }
     header { position: fixed; z-index: 3; top: max(24px, env(safe-area-inset-top)); left: clamp(22px, 4vw, 58px); pointer-events: none; }
     h1 { margin: 0; font-size: clamp(22px, 2.3vw, 34px); line-height: 1.25; font-weight: 700; letter-spacing: .06em; text-shadow: 0 2px 18px #070b13aa; }
     .actions { position: fixed; z-index: 4; bottom: max(28px, calc(env(safe-area-inset-bottom) + 20px)); left: 50%; display: flex; gap: 12px; transform: translateX(-50%); }
@@ -22,9 +33,11 @@
     button:disabled { cursor: default; opacity: .54; }
     #explode { color: #171a20; border-color: #f0c68f; background: #efc58d; }
     #explode:hover:not(:disabled) { background: #ffdbab; }
-    .part-label { position: relative; white-space: nowrap; padding: 7px 12px; border: 1px solid #ffffff32; border-radius: 10px; background: #101824d9; color: #fff; box-shadow: 0 5px 20px #05091266; font-size: 15px; line-height: 1.25; font-weight: 600; letter-spacing: .04em; opacity: 0; transition: opacity .24s ease; backdrop-filter: blur(8px); }
+    .part-label { position: absolute; white-space: nowrap; padding: 7px 12px; border: 1px solid #ffffff32; border-radius: 10px; background: #101824e6; color: #fff; box-shadow: 0 5px 20px #05091266; font-size: 15px; line-height: 1.25; font-weight: 600; letter-spacing: .04em; opacity: 0; transition: opacity .24s ease; backdrop-filter: blur(8px); text-align: center; }
     .part-label.visible { opacity: 1; }
-    @media (max-width: 600px) { header { top: max(24px, env(safe-area-inset-top)); } h1 { font-size: 23px; } .actions { width: calc(100% - 40px); gap: 10px; } button { flex: 1; min-width: 0; height: 56px; } .part-label { padding: 5px 8px; font-size: 13px; border-radius: 8px; } }
+    .leader { opacity: 0; transition: opacity .24s ease; }
+    .leader.visible { opacity: 1; }
+    @media (max-width: 600px) { header { top: max(24px, env(safe-area-inset-top)); } h1 { font-size: 23px; } .actions { width: calc(100% - 40px); gap: 10px; } button { flex: 1; min-width: 0; height: 56px; } .part-label { padding: 5px 7px; font-size: 12px; border-radius: 8px; } }
   </style>
   <script type="importmap">
     {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
@@ -32,34 +45,49 @@
 </head>
 <body>
   <canvas id="stage" aria-label="可旋转的三维机械键盘"></canvas>
+  <svg id="leaders" aria-hidden="true"></svg>
+  <div id="labels" aria-hidden="true"></div>
   <header><h1>机械键盘 3D 拆解</h1></header>
   <div class="actions"><button id="explode" type="button">拆解</button><button id="reset" type="button" disabled>复位</button></div>
   <script type="module">
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-    import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
     import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
     import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
-    // 统一调节层高、节奏、机位与配色。位置均为世界坐标的 Y 值。
+    // 统一调节层高、额外前后偏移、镜头、引线、字符与配色。
     const CONFIG = {
-      colors: { case: 0x596673, rim: 0x929ca5, plate: 0xa7b0b5, pcb: 0x173b38, key: 0xe4dfd4, accent: 0xd78962, switch: 0x28303a, floor: 0x18212d },
+      background: { base: '#07121e', corner: '#0b1827', glow: '#385b7555', wash: '#17283c55', spot: '#1a6b8750', grid: '#8ac1d30d' },
+      colors: { case: 0xb9c2c8, rim: 0xe4e9ec, plate: 0x9caab0, pcb: 0x173b38, key: 0xe4dfd4, accent: 0xd78962, switch: 0x263039, stem: 0xd94335, legend: '#26313b', floor: 0x18212d },
+      leaders: {
+        width: 1.25, opacity: .58, dotRadius: 2.6, dotOpacity: .84, gap: 8, sideInset: 16,
+        labelWidthWide: 118, labelWidthTall: 91, topSafe: 108, bottomSafe: 112, labelYShift: { usb: -24 },
+        anchors: { keys: [2,.16,0], space: [-.25,.16,1.53], switches: [1.6,.16,0], stabilizer: [-.25,.24,1.53], plate: [2,.07,0], pcb: [2,.07,0], usb: [-2.5,.25,-2.5], case: [2,.25,0] }
+      },
+      keyLegends: [
+        ['Esc','1','2','3','4','5','6','7','8','9','0','-','=','⌫'],
+        ['Tab','Q','W','E','R','T','Y','U','I','O','P','[',']','\\'],
+        ['Caps','A','S','D','F','G','H','J','K','L',';','\'','Enter'],
+        ['Shift','Z','X','C','V','B','N','M',',','.','/','↑','Shift'],
+        ['Ctrl','Win','Alt','⌘','','','','','','Alt','Fn','Ctrl']
+      ],
       motion: { stagger: 80, duration: 800, resetDuration: 650, back: 1.15, cameraDuration: 1200 },
       layers: [
-        { id: 'keys', name: '键帽', assembled: 1.18, exploded: 7.95 },
-        { id: 'space', name: '空格键', assembled: 1.18, exploded: 7.10 },
-        { id: 'switches', name: '轴体', assembled: .84, exploded: 6.25 },
-        { id: 'stabilizer', name: '卫星轴', assembled: .73, exploded: 5.40 },
-        { id: 'plate', name: '定位板', assembled: .57, exploded: 4.55 },
-        { id: 'pcb', name: 'PCB 电路板', assembled: .30, exploded: 3.70 },
-        { id: 'usb', name: 'USB 接口', assembled: .22, exploded: 2.85 },
-        { id: 'case', name: '外壳', assembled: 0, exploded: 0 }
+        { id: 'keys', name: '键帽', assembled: 1.18, exploded: 11.35, offsetZ: 0 },
+        { id: 'space', name: '空格键', assembled: 1.18, exploded: 9.85, offsetZ: 1.20 },
+        { id: 'switches', name: '轴体', assembled: .84, exploded: 8.50, offsetZ: 0 },
+        { id: 'stabilizer', name: '卫星轴', assembled: .73, exploded: 7.15, offsetZ: 0 },
+        { id: 'plate', name: '定位板', assembled: .57, exploded: 5.80, offsetZ: 0 },
+        { id: 'pcb', name: 'PCB 电路板', assembled: .30, exploded: 4.45, offsetZ: 0 },
+        { id: 'usb', name: 'USB 接口', assembled: .22, exploded: 2.70, offsetZ: { wide: -1.35, tall: -.35 }, offsetX: { wide: 7, tall: 0 }, turnY: -Math.PI/2 },
+        { id: 'case', name: '外壳', assembled: 0, exploded: 0, offsetZ: 0 }
       ],
       cameras: {
-        wide: { initial: { position: [12, 9, 14], target: [0, .6, 0], fov: 36 }, display: { position: [16, 12, 19], target: [0, 4.1, 0], fov: 35 } },
-        tall: { initial: { position: [22, 15, 17], target: [0, .65, 0], fov: 49 }, display: { position: [22, 18, 19], target: [0, 4.05, 0], fov: 49 } }
+        wide: { initial: { position: [10, 8, 12], target: [0, .6, 0], fov: 36 }, display: { position: [17, 15, 20], target: [0, 5.5, 0], fov: 38 } },
+        tall: { initial: { position: [22, 15, 17], target: [0, .65, 0], fov: 49 }, display: { position: [25, 14, 3], target: [1.3, 5.4, -.9], fov: 45 } }
       }
     };
+    for (const [name, value] of Object.entries(CONFIG.background)) document.documentElement.style.setProperty(`--bg-${name}`, value);
 
     const canvas = document.querySelector('#stage');
     const scene = new THREE.Scene();
@@ -71,10 +99,6 @@
     renderer.toneMappingExposure = 1.4;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    const labelRenderer = new CSS2DRenderer();
-    labelRenderer.domElement.id = 'labels';
-    labelRenderer.domElement.setAttribute('aria-hidden', 'true');
-    document.body.appendChild(labelRenderer.domElement);
     const environment = new RoomEnvironment();
     const pmrem = new THREE.PMREMGenerator(renderer);
     scene.environment = pmrem.fromScene(environment).texture;
@@ -107,15 +131,29 @@
     canvas.addEventListener('wheel', () => { userInteracted = true; controls.autoRotate = false; }, { passive: true });
 
     const mat = (color, metalness, roughness) => new THREE.MeshStandardMaterial({ color, metalness, roughness });
+    // 程序化细纹仅用于银灰外壳，不请求图片资源。
+    const brushCanvas = document.createElement('canvas');
+    brushCanvas.width = brushCanvas.height = 256;
+    const brush = brushCanvas.getContext('2d');
+    brush.fillStyle = '#f1f3f3'; brush.fillRect(0, 0, 256, 256);
+    for (let y=0; y<256; y+=2) {
+      const shade = y%6===0 ? 24 : 10;
+      brush.fillStyle = `rgba(57,72,83,${shade/255})`;
+      brush.fillRect(0, y, 256, 1);
+    }
+    const brushTexture = new THREE.CanvasTexture(brushCanvas);
+    brushTexture.colorSpace = THREE.SRGBColorSpace;
+    brushTexture.wrapS = brushTexture.wrapT = THREE.RepeatWrapping;
+    brushTexture.repeat.set(2, 2);
     const M = {
-      shell: mat(CONFIG.colors.case, .82, .29), rim: mat(CONFIG.colors.rim, .88, .25),
+      shell: new THREE.MeshStandardMaterial({ color: CONFIG.colors.case, map: brushTexture, metalness: .83, roughness: .40 }),
+      rim: mat(CONFIG.colors.rim, .9, .25),
       plate: mat(CONFIG.colors.plate, .78, .31), pcb: mat(CONFIG.colors.pcb, .23, .48),
       trace: mat(0xb99b5e, .65, .38), chip: mat(0x11191b, .18, .6),
       key: mat(CONFIG.colors.key, .02, .83), keySide: mat(0xb5b3ac, .02, .78),
       accent: mat(CONFIG.colors.accent, .07, .64), switch: mat(CONFIG.colors.switch, .1, .59),
-      stem: mat(0xd4ddd9, .12, .4), port: mat(0x242b30, .63, .3)
+      stem: mat(CONFIG.colors.stem, .12, .43), port: mat(0x242b30, .63, .3)
     };
-    const box = new THREE.BoxGeometry(1, 1, 1);
     const round = (w, h, d, r=.08) => new RoundedBoxGeometry(w, h, d, 3, r);
     const boardW = 11.75, boardD = 4.35;
     const groups = {};
@@ -166,10 +204,12 @@
       for (const s of [-1,1]) for (let i=0;i<4;i++) slab(groups.pcb, M.trace, .025, .012, .052, x+(i-1.5)*.11, .064, z+s*.205, .004);
     }
 
-    // USB 接口独立成组，装配时与后缘齐平。
-    slab(groups.usb, M.port, .72, .27, .43, 0, 0, -2.19, .045);
-    slab(groups.usb, M.rim, .54, .16, .035, 0, .015, -2.426, .012);
-    slab(groups.usb, M.chip, .39, .08, .01, 0, .015, -2.45, .002);
+    // USB 接口加大到约 1.8 倍，保留后缘装配位置。
+    slab(groups.usb, M.port, 1.40, .54, .84, -2.5, 0, -2.25, .065);
+    slab(groups.usb, M.rim, 1.16, .34, .095, -2.5, .015, -2.72, .018);
+    slab(groups.usb, M.chip, .88, .18, .022, -2.5, .015, -2.78, .005);
+    slab(groups.usb, M.rim, 1.28, .06, .65, -2.5, .30, -2.29, .02);
+    slab(groups.usb, M.rim, .08, .42, .83, -1.77, 0, -2.25, .012);
 
     // 定位板与轴体。轴体共用几何体和材质，降低绘制与内存开销。
     slab(groups.plate, M.plate, boardW-.32, .13, boardD-.32, 0, 0, 0, .08);
@@ -190,12 +230,60 @@
         keyPositions.push([x,z,row,col]);
       }
     }
+    // 定位板上的规则开孔纹理：透明 CanvasTexture 贴在板面。
+    const plateCanvas = document.createElement('canvas');
+    plateCanvas.width = 1024; plateCanvas.height = 360;
+    const pc = plateCanvas.getContext('2d');
+    const plateW = boardW-.32, plateD = boardD-.32;
+    for (const [x,z] of keyPositions) {
+      const px = (x+plateW/2)/plateW*plateCanvas.width;
+      const pz = (z+plateD/2)/plateD*plateCanvas.height;
+      const rw = .57/plateW*plateCanvas.width, rh = .57/plateD*plateCanvas.height;
+      pc.fillStyle = 'rgba(24,35,43,.8)'; pc.fillRect(px-rw/2, pz-rh/2, rw, rh);
+      pc.strokeStyle = 'rgba(224,232,235,.8)'; pc.lineWidth = 2;
+      pc.strokeRect(px-rw/2, pz-rh/2, rw, rh);
+    }
+    const plateTexture = new THREE.CanvasTexture(plateCanvas);
+    plateTexture.colorSpace = THREE.SRGBColorSpace;
+    const plateDetail = new THREE.Mesh(new THREE.PlaneGeometry(plateW, plateD), new THREE.MeshBasicMaterial({ map: plateTexture, transparent: true, depthWrite: false, opacity: .8 }));
+    plateDetail.rotation.x = -Math.PI/2;
+    plateDetail.position.y = .067;
+    groups.plate.add(plateDetail);
+
+    // 字符按键名复用纹理与材质，绘制在键帽顶面。
+    const legendGeometry = new THREE.PlaneGeometry(1, 1);
+    const legendMaterials = new Map();
+    function legendMaterial(text) {
+      if (legendMaterials.has(text)) return legendMaterials.get(text);
+      const c = document.createElement('canvas'); c.width = c.height = 128;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = CONFIG.colors.legend;
+      const size = text.length > 4 ? 36 : text.length > 2 ? 46 : 73;
+      ctx.font = `700 ${size}px Arial, sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(text, 64, 67);
+      const texture = new THREE.CanvasTexture(c);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+      const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+      legendMaterials.set(text, material);
+      return material;
+    }
     for (const [x,z,row,col] of keyPositions) {
       slab(groups.switches, M.switch, .54, .20, .54, x, 0, z, .04);
       mesh(switchStem, M.stem, groups.switches, x, .16, z);
       const keyMaterial = (row===0 && col===0) || (row===3 && col===12) ? M.accent : M.key;
       mesh(keySkirt, M.keySide, groups.keys, x, -.055, z);
       mesh(keyTop, keyMaterial, groups.keys, x, .07, z);
+      const character = CONFIG.keyLegends[row][col];
+      if (character) {
+        const glyph = new THREE.Mesh(legendGeometry, legendMaterial(character));
+        glyph.rotation.x = -Math.PI/2;
+        glyph.position.set(x, .164, z);
+        glyph.scale.set(character.length > 3 ? .44 : .31, character.length > 3 ? .20 : .31, 1);
+        glyph.renderOrder = 2;
+        groups.keys.add(glyph);
+      }
     }
     // 空格键下方保留一枚轴体，卫星轴独立为平衡杆与两端支架。
     mesh(switchHousing, M.switch, groups.switches, -.25, 0, rowZ[4]);
@@ -203,10 +291,10 @@
     slab(groups.space, M.keySide, 3.76, .13, .72, -.25, -.055, rowZ[4], .055);
     slab(groups.space, M.key, 3.72, .18, .68, -.25, .07, rowZ[4], .09);
     for (const x of [-1.72, 1.22]) {
-      slab(groups.stabilizer, M.switch, .26, .18, .34, x, 0, rowZ[4], .025);
-      slab(groups.stabilizer, M.stem, .10, .12, .10, x, .14, rowZ[4], .015);
+      slab(groups.stabilizer, M.rim, .32, .34, .40, x, 0, rowZ[4], .035);
+      slab(groups.stabilizer, M.port, .13, .16, .13, x, .24, rowZ[4], .018);
     }
-    beam(groups.stabilizer, M.rim, new THREE.Vector3(-1.72,.13,rowZ[4]-.18), new THREE.Vector3(1.22,.13,rowZ[4]-.18), .027);
+    beam(groups.stabilizer, M.rim, new THREE.Vector3(-1.72,.22,rowZ[4]-.21), new THREE.Vector3(1.22,.22,rowZ[4]-.21), .065);
 
     // 接地阴影。
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(200,200), new THREE.ShadowMaterial({ color: CONFIG.colors.floor, opacity: .32 }));
@@ -215,23 +303,83 @@
     floor.receiveShadow = true;
     scene.add(floor);
 
-    // 标签挂在各自的组上，CSS2DRenderer 让它们始终朝向屏幕。
-    const labelElements = {}, labelObjects = {};
-    const labelHeights = { keys: .9, space: .6, switches: .3, stabilizer: 0, plate: -.3, pcb: -.6, usb: -.9, case: .3 };
+    // 固定侧栏标签；锚点每帧从模型世界坐标投影到 SVG 屏幕坐标。
+    const labelContainer = document.querySelector('#labels');
+    const leaderSvg = document.querySelector('#leaders');
+    const labelElements = {}, leaderGroups = {}, leaderLines = {}, leaderDots = {};
+    const svgNS = 'http://www.w3.org/2000/svg';
     for (const item of CONFIG.layers) {
       const element = document.createElement('div');
       element.className = 'part-label';
       element.textContent = item.name;
-      const label = new CSS2DObject(element);
-      label.position.set(innerWidth > innerHeight ? 5.25 : 3.5, labelHeights[item.id], 0);
-      groups[item.id].add(label);
+      labelContainer.appendChild(element);
+      const leader = document.createElementNS(svgNS, 'g');
+      leader.classList.add('leader');
+      const line = document.createElementNS(svgNS, 'polyline');
+      line.setAttribute('fill', 'none');
+      line.setAttribute('stroke', 'white');
+      line.setAttribute('stroke-width', CONFIG.leaders.width);
+      line.setAttribute('stroke-opacity', CONFIG.leaders.opacity);
+      line.setAttribute('stroke-linecap', 'round');
+      line.setAttribute('stroke-linejoin', 'round');
+      const dot = document.createElementNS(svgNS, 'circle');
+      dot.setAttribute('r', CONFIG.leaders.dotRadius);
+      dot.setAttribute('fill', 'white');
+      dot.setAttribute('fill-opacity', CONFIG.leaders.dotOpacity);
+      leader.append(line, dot);
+      leaderSvg.appendChild(leader);
       labelElements[item.id] = element;
-      labelObjects[item.id] = label;
+      leaderGroups[item.id] = leader;
+      leaderLines[item.id] = line;
+      leaderDots[item.id] = dot;
+    }
+    const showLabel = (id, visible) => {
+      labelElements[id].classList.toggle('visible', visible);
+      leaderGroups[id].classList.toggle('visible', visible);
+    };
+    const projected = new THREE.Vector3();
+    function updateLabels() {
+      const { gap, sideInset, labelWidthWide, labelWidthTall, topSafe, bottomSafe, anchors, labelYShift } = CONFIG.leaders;
+      const width = innerWidth, height = innerHeight;
+      const labelWidth = width > height ? labelWidthWide : labelWidthTall;
+      const labelX = width-labelWidth-sideInset;
+      const topLimit = Math.max(topSafe, document.querySelector('header').getBoundingClientRect().bottom+12);
+      const bottomLimit = height-bottomSafe;
+      const heights = CONFIG.layers.map(item => {
+        const el = labelElements[item.id];
+        el.style.width = `${labelWidth}px`;
+        return el.getBoundingClientRect().height;
+      });
+      const anchorPoints = CONFIG.layers.map(item => {
+        projected.fromArray(anchors[item.id]);
+        groups[item.id].localToWorld(projected);
+        projected.project(camera);
+        return { x: (projected.x+1)*width/2, y: (1-projected.y)*height/2 };
+      });
+      const tops = anchorPoints.map((point,i) => Math.max(topLimit, point.y-heights[i]/2+(labelYShift[CONFIG.layers[i].id] ?? 0)));
+      for (let i=1; i<tops.length; i++) tops[i] = Math.max(tops[i], tops[i-1]+heights[i-1]+gap);
+      const overflow = tops.at(-1)+heights.at(-1)-bottomLimit;
+      if (overflow>0) for (let i=0; i<tops.length; i++) tops[i]-=overflow;
+      if (tops[0]<topLimit) {
+        const shift = topLimit-tops[0];
+        for (let i=0; i<tops.length; i++) tops[i]+=shift;
+      }
+      CONFIG.layers.forEach((item,i) => {
+        const el = labelElements[item.id];
+        const point = anchorPoints[i];
+        const labelY = tops[i]+heights[i]/2;
+        el.style.transform = `translate(${labelX}px, ${tops[i]}px)`;
+        const elbowX = labelX-11;
+        leaderLines[item.id].setAttribute('points', `${point.x},${point.y} ${elbowX},${labelY} ${labelX},${labelY}`);
+        leaderDots[item.id].setAttribute('cx', point.x);
+        leaderDots[item.id].setAttribute('cy', point.y);
+      });
     }
 
     const explodeButton = document.querySelector('#explode');
     const resetButton = document.querySelector('#reset');
     const wide = () => innerWidth > innerHeight;
+    const zOffset = item => typeof item.offsetZ === 'number' ? item.offsetZ : item.offsetZ[wide() ? 'wide' : 'tall'];
     const view = (mode) => CONFIG.cameras[wide() ? 'wide' : 'tall'][mode];
     const setView = (preset) => {
       camera.position.fromArray(preset.position);
@@ -248,8 +396,11 @@
       camera.aspect = width/height;
       renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
       renderer.setSize(width, height, false);
-      labelRenderer.setSize(width, height);
-      for (const label of Object.values(labelObjects)) label.position.x = wide() ? 5.25 : 3.5;
+      leaderSvg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+      if (!animation && state==='exploded') for (const item of CONFIG.layers) {
+        groups[item.id].position.x = item.offsetX?.[wide() ? 'wide' : 'tall'] ?? 0;
+        groups[item.id].position.z = zOffset(item);
+      }
       if (!animation) setView(view(state==='assembled' ? 'initial' : 'display'));
       camera.updateProjectionMatrix();
     }
@@ -264,16 +415,19 @@
       if (animation) return; // 状态锁：连续点击不会重置动画起点。
       if (exploding && state==='exploded' || !exploding && state==='assembled') return;
       const from = CONFIG.layers.map(item => groups[item.id].position.y);
+      const fromZ = CONFIG.layers.map(item => groups[item.id].position.z);
+      const fromX = CONFIG.layers.map(item => groups[item.id].position.x);
+      const fromRotation = CONFIG.layers.map(item => groups[item.id].rotation.y);
       const cameraFrom = camera.position.clone();
       const targetFrom = controls.target.clone();
       const fovFrom = camera.fov;
       const cameraTo = view(exploding ? 'display' : 'initial');
-      animation = { exploding, start: performance.now(), from, cameraFrom, targetFrom, fovFrom, cameraTo };
+      animation = { exploding, start: performance.now(), from, fromZ, fromX, fromRotation, cameraFrom, targetFrom, fovFrom, cameraTo };
       explodeButton.disabled = true;
       resetButton.disabled = true;
       controls.enabled = false;
       controls.autoRotate = false;
-      for (const element of Object.values(labelElements)) element.classList.remove('visible');
+      for (const item of CONFIG.layers) showLabel(item.id, false);
     }
     explodeButton.addEventListener('click', () => startTransition(true));
     resetButton.addEventListener('click', () => startTransition(false));
@@ -291,7 +445,10 @@
         const progress = clamp((elapsed-order*stagger)/travel);
         const eased = a.exploding ? outBack(progress, back) : smooth(progress);
         groups[item.id].position.y = THREE.MathUtils.lerp(a.from[i], a.exploding ? item.exploded : item.assembled, eased);
-        if (a.exploding && progress >= .92) labelElements[item.id].classList.add('visible');
+        groups[item.id].position.z = THREE.MathUtils.lerp(a.fromZ[i], a.exploding ? zOffset(item) : 0, eased);
+        groups[item.id].position.x = THREE.MathUtils.lerp(a.fromX[i], a.exploding ? (item.offsetX?.[wide() ? 'wide' : 'tall'] ?? 0) : 0, eased);
+        groups[item.id].rotation.y = THREE.MathUtils.lerp(a.fromRotation[i], a.exploding ? (item.turnY ?? 0) : 0, eased);
+        if (a.exploding && progress >= .92) showLabel(item.id, true);
       }
       const cameraProgress = smooth(elapsed/cameraDuration);
       camera.position.copy(a.cameraFrom).lerp(new THREE.Vector3().fromArray(a.cameraTo.position), cameraProgress);
@@ -300,7 +457,12 @@
       camera.updateProjectionMatrix();
       const total = (count-1)*stagger+(a.exploding ? duration : resetDuration);
       if (elapsed >= Math.max(total, cameraDuration)) {
-        for (const item of CONFIG.layers) groups[item.id].position.y = a.exploding ? item.exploded : item.assembled;
+        for (const item of CONFIG.layers) {
+          groups[item.id].position.y = a.exploding ? item.exploded : item.assembled;
+          groups[item.id].position.z = a.exploding ? zOffset(item) : 0;
+          groups[item.id].position.x = a.exploding ? (item.offsetX?.[wide() ? 'wide' : 'tall'] ?? 0) : 0;
+          groups[item.id].rotation.y = a.exploding ? (item.turnY ?? 0) : 0;
+        }
         state = a.exploding ? 'exploded' : 'assembled';
         animation = null;
         controls.enabled = true;
@@ -314,7 +476,7 @@
       updateTransition(now);
       controls.update();
       renderer.render(scene, camera);
-      labelRenderer.render(scene, camera);
+      updateLabels();
     }
     requestAnimationFrame(frame);
   </script>
